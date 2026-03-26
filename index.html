@@ -3,23 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>云端错题本 - 图片修复版</title>
+    <title>云端错题本 - 缓存与图片深度修复版</title>
     <style>
         :root { --primary: #2563eb; --bg: #f1f5f9; }
         body { font-family: system-ui, sans-serif; background: var(--bg); padding: 15px; margin: 0; }
-        .container { max-width: 800px; margin: 0 auto; }
-        .auth-bar { background: white; padding: 12px; border-radius: 10px; display: flex; gap: 8px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .editor { background: white; padding: 15px; border-radius: 10px; margin-bottom: 15px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; }
-        .preview-box { border: 2px dashed #ddd; border-radius: 8px; min-height: 100px; display: flex; align-items: center; justify-content: center; cursor: pointer; background: #fafafa; overflow: hidden; margin-top: 5px; }
-        .preview-box img { max-width: 100%; max-height: 150px; }
-        textarea { width: 100%; border: 1px solid #ccc; border-radius: 6px; padding: 8px; box-sizing: border-box; }
-        .btn { cursor: pointer; border: none; padding: 10px 15px; border-radius: 6px; font-weight: bold; transition: 0.3s; }
-        .btn-save { background: var(--primary); color: white; width: 100%; }
-        .btn-save:disabled { background: #94a3b8; cursor: not-allowed; }
+        .container { max-width: 700px; margin: 0 auto; }
+        .auth-bar { background: white; padding: 12px; border-radius: 10px; display: flex; gap: 8px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); flex-wrap: wrap; }
+        .editor { background: white; padding: 15px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+        .preview-box { border: 2px dashed #ddd; border-radius: 8px; min-height: 80px; display: flex; align-items: center; justify-content: center; cursor: pointer; background: #fafafa; overflow: hidden; margin-top: 5px; }
+        .preview-box img { max-width: 100%; max-height: 120px; }
+        textarea { width: 100%; border: 1px solid #ccc; border-radius: 6px; padding: 8px; box-sizing: border-box; resize: vertical; }
+        .btn { cursor: pointer; border: none; padding: 10px 15px; border-radius: 6px; font-weight: bold; transition: 0.2s; }
+        .btn-save { background: var(--primary); color: white; width: 100%; height: 45px; }
+        .btn-save:disabled { background: #94a3b8; cursor: wait; }
         .card { background: white; padding: 15px; border-radius: 10px; margin-bottom: 15px; border-left: 5px solid var(--primary); }
-        .status-on { color: #22c55e; font-weight: bold; }
-        #list img { max-width: 100%; border-radius: 6px; margin-top: 10px; }
+        .card img { max-width: 100%; border-radius: 6px; margin-top: 8px; display: block; }
+        #status { font-size: 12px; display: flex; align-items: center; gap: 5px; }
     </style>
 </head>
 <body>
@@ -28,25 +28,25 @@
     <div class="auth-bar">
         <input type="password" id="token" style="flex:2" placeholder="GitHub Token">
         <input type="text" id="repo" style="flex:1" placeholder="用户名/仓库名">
-        <button class="btn" style="background:#eee" onclick="init()">连接云端</button>
-        <span id="status">未连接</span>
+        <button class="btn" style="background:#e2e8f0" onclick="connect()">连接云端</button>
+        <div id="status">🔴 未连接</div>
     </div>
 
     <div id="main" style="display:none">
         <div class="editor">
             <div class="grid">
                 <div>
-                    <textarea id="qT" rows="3" placeholder="题目文字..."></textarea>
-                    <div class="preview-box" id="qP" onclick="document.getElementById('qF').click()">点此或粘贴图片</div>
-                    <input type="file" id="qF" hidden accept="image/*" onchange="processImg(this, 'q')">
+                    <textarea id="qT" rows="2" placeholder="题目..."></textarea>
+                    <div class="preview-box" id="qP" onclick="document.getElementById('qF').click()">点此/粘贴图</div>
+                    <input type="file" id="qF" hidden accept="image/*" onchange="compressAndSet(this, 'q')">
                 </div>
                 <div>
-                    <textarea id="aT" rows="3" placeholder="解析文字..."></textarea>
-                    <div class="preview-box" id="aP" onclick="document.getElementById('aF').click()">点此或粘贴图片</div>
-                    <input type="file" id="aF" hidden accept="image/*" onchange="processImg(this, 'a')">
+                    <textarea id="aT" rows="2" placeholder="解析..."></textarea>
+                    <div class="preview-box" id="aP" onclick="document.getElementById('aF').click()">点此/粘贴图</div>
+                    <input type="file" id="aF" hidden accept="image/*" onchange="compressAndSet(this, 'a')">
                 </div>
             </div>
-            <button class="btn btn-save" id="saveBtn" onclick="doSave()">保存并永久同步</button>
+            <button class="btn btn-save" id="saveBtn" onclick="upload()">保存错题到 GitHub</button>
         </div>
         <div id="list"></div>
     </div>
@@ -55,9 +55,9 @@
 <script>
     let state = { db: { questions: [] }, sha: null, imgs: { q: '', a: '' } };
 
-    // --- 核心修复：图片压缩逻辑 ---
-    async function processImg(input, type) {
-        const file = input.files ? input.files[0] : input; // 支持文件选择和粘贴
+    // 1. 强力压缩图片：宽度 600px，质量 0.5
+    function compressAndSet(input, type) {
+        const file = input.files ? input.files[0] : input;
         if (!file) return;
 
         const reader = new FileReader();
@@ -66,58 +66,63 @@
             img.src = e.target.result;
             img.onload = () => {
                 const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 800; // 限制宽度，减小体积
+                const MAX_WIDTH = 600; 
                 const scale = Math.min(1, MAX_WIDTH / img.width);
                 canvas.width = img.width * scale;
                 canvas.height = img.height * scale;
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                
-                // 压缩为 JPEG，质量 0.7
-                const compressed = canvas.toDataURL('image/jpeg', 0.7);
-                state.imgs[type] = compressed;
-                document.getElementById(type + 'P').innerHTML = `<img src="${compressed}">`;
+                // 压缩为 JPEG 0.5，显著减小 Base64 长度
+                const data = canvas.toDataURL('image/jpeg', 0.5);
+                state.imgs[type] = data;
+                document.getElementById(type + 'P').innerHTML = `<img src="${data}">`;
             };
         };
         reader.readAsDataURL(file);
     }
 
-    // --- 监听粘贴事件 ---
     window.addEventListener('paste', e => {
         const item = Array.from(e.clipboardData.items).find(i => i.type.includes('image'));
         if (item) {
             const type = document.activeElement.id === 'aT' ? 'a' : 'q';
-            processImg(item.getAsFile(), type);
+            compressAndSet(item.getAsFile(), type);
         }
     });
 
-    // --- 连接与读取 ---
-    async function init() {
-        const token = document.getElementById('token').value;
-        const repo = document.getElementById('repo').value;
+    // 2. 连接：加入时间戳防止缓存
+    async function connect() {
+        const t = document.getElementById('token').value;
+        const r = document.getElementById('repo').value;
+        const statusEl = document.getElementById('status');
+        
         try {
-            const res = await fetch(`https://api.github.com/repos/${repo}/contents/data.json?t=${Date.now()}`, {
-                headers: { 'Authorization': `token ${token}` }
+            // URL 后面加时间戳 t=${Date.now()} 强制拉取服务器最新数据
+            const res = await fetch(`https://api.github.com/repos/${r}/contents/data.json?t=${Date.now()}`, {
+                headers: { 'Authorization': `token ${t}` }
             });
             if (res.ok) {
                 const data = await res.json();
                 state.sha = data.sha;
-                // 使用安全的解码方式
                 const content = decodeURIComponent(escape(atob(data.content)));
                 state.db = JSON.parse(content || '{"questions":[]}');
                 
-                document.getElementById('status').innerHTML = '<span class="status-on">已连接</span>';
+                statusEl.innerHTML = '🟢 已连接最新数据';
                 document.getElementById('main').style.display = 'block';
                 render();
-            } else { alert("连接失败，请检查仓库和Token"); }
-        } catch (e) { alert("网络异常"); }
+            } else { alert("连接失败，请检查配置"); }
+        } catch (e) { alert("网络错误，无法访问 GitHub"); }
     }
 
-    // --- 保存逻辑 ---
-    async function doSave() {
+    // 3. 上传：保存后强制拉取最新 SHA
+    async function upload() {
         const btn = document.getElementById('saveBtn');
+        const t = document.getElementById('token').value;
+        const r = document.getElementById('repo').value;
+
+        if (!state.imgs.q && !document.getElementById('qT').value) return alert("空内容无法保存");
+
         btn.disabled = true;
-        btn.innerText = "正在同步图片与数据...";
+        btn.innerText = "数据写入中...";
 
         const newItem = {
             id: Date.now(),
@@ -130,15 +135,12 @@
 
         state.db.questions.unshift(newItem);
 
-        const token = document.getElementById('token').value;
-        const repo = document.getElementById('repo').value;
-
         try {
-            const res = await fetch(`https://api.github.com/repos/${repo}/contents/data.json`, {
+            const res = await fetch(`https://api.github.com/repos/${r}/contents/data.json`, {
                 method: 'PUT',
-                headers: { 'Authorization': `token ${token}`, 'Content-Type': 'application/json' },
+                headers: { 'Authorization': `token ${t}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    message: "save note",
+                    message: "update-note",
                     content: btoa(unescape(encodeURIComponent(JSON.stringify(state.db)))),
                     sha: state.sha
                 })
@@ -146,41 +148,41 @@
 
             if (res.ok) {
                 const updated = await res.json();
-                state.sha = updated.content.sha; // 极其重要：更新下一次保存用的 SHA
-                alert("已成功存入 GitHub 云端！");
-                reset();
+                state.sha = updated.content.sha; // 更新本地 SHA
+                alert("✅ 错题已永久保存至 GitHub 仓库！");
+                clear();
                 render();
             } else {
                 const err = await res.json();
                 throw new Error(err.message);
             }
         } catch (e) {
-            alert("同步失败: " + e.message);
+            alert("❌ 保存失败: " + e.message);
             state.db.questions.shift(); // 失败回滚
         } finally {
             btn.disabled = false;
-            btn.innerText = "保存并永久同步";
+            btn.innerText = "保存错题到 GitHub";
         }
     }
 
     function render() {
-        document.getElementById('list').innerHTML = state.db.questions.map(i => `
+        document.getElementById('list').innerHTML = (state.db.questions || []).map(i => `
             <div class="card">
-                <small>${i.date}</small>
+                <small style="color:#999">${i.date}</small>
                 <p><b>问:</b> ${i.q}</p>
                 ${i.qImg ? `<img src="${i.qImg}">` : ''}
-                <hr>
+                <hr style="border:0;border-top:1px solid #eee;margin:10px 0">
                 <p><b>答:</b> ${i.a}</p>
                 ${i.aImg ? `<img src="${i.aImg}">` : ''}
             </div>
         `).join('');
     }
 
-    function reset() {
+    function clear() {
         document.getElementById('qT').value = '';
         document.getElementById('aT').value = '';
-        document.getElementById('qP').innerText = '点此或粘贴图片';
-        document.getElementById('aP').innerText = '点此或粘贴图片';
+        document.getElementById('qP').innerText = '点此/粘贴图';
+        document.getElementById('aP').innerText = '点此/粘贴图';
         state.imgs = { q: '', a: '' };
     }
 </script>
