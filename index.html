@@ -132,6 +132,22 @@
         } finally {
             toggleLoading(false);
         }
+        // 修改 connectCloud 或 fetchData 函数中的解析逻辑
+        try {
+            const rawContent = atob(data.content); // 获取原始 Base64
+            const decodedContent = decodeURIComponent(escape(rawContent)); // 处理中文
+    
+            if (!decodedContent || decodedContent.trim() === "") {
+                state.db = { questions: [] }; // 如果是空的，给个默认结构
+            } else {
+                state.db = JSON.parse(decodedContent);
+            }
+        } catch (e) {
+            console.error("JSON 解析失败:", e);
+            // 如果解析失败，说明文件损坏，可以强制初始化或提醒用户
+            state.db = { questions: [] }; 
+            alert("警告：云端数据格式异常，已尝试初始化。");
+        }
     }
 
     // 渲染列表 (带搜索)
