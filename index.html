@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>云端错题本 - 增强版</title>
+    <style>
+        :root { --primary: #2563eb; --success: #22c55e; --danger: #ef4444; --bg: #f1f5f9; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); padding: 20px; color: #1e293b; }
+        .container { max-width: 850px; margin: 0 auto; }
+        
+        /* 认证状态栏 */
+        .auth-bar { background: white; padding: 15px; border-radius: 12px; display: flex; gap: 10px; align-items: center; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #ccc; }
+        .status-active { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        
+        input, textarea { border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-size: 14px; transition: all 0.2s; box-sizing: border-box; }
+        input:focus { outline: none; border-color: var(--primary); }
+        
+        /* 编辑器 */
+        .editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; background: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
+        .img-area { border: 2px dashed #e2e8f0; border-radius: 8px; min-height: 100px; display: flex; align-items: center; justify-content: center; cursor: pointer; background: #f8fafc; overflow: hidden; margin-top: 8px; }
+        .img-area img { max-width: 100%; max-height: 150px; }
+
+        /* 搜索框 */
+        .search-bar { width: 100%; margin-bottom: 20px; padding: 12px; border: none; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+
+        .btn { cursor: pointer; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-danger { background: #fee2e2; color: var(--danger); }
+        .card { background: white; padding: 20px; border-radius: 12px; margin-bottom: 15px; border-left: 4px solid var(--primary); animation: fadeIn 0.3s ease; }
+        
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="auth-bar">
+        <div id="statusDot" class="status-dot"></div>
+        <input type="password" id="token" style="flex:2" placeholder="GitHub Token">
+        <input type="text" id="repo" style="flex:1" placeholder="用户名/仓库名">
+        <button class="btn btn-primary" onclick="validateAndSync()">连接云端</button>
+        <button class="btn btn-danger" onclick="logout()">注销</button>
+    </div>
+
+    <div id="mainContent" class="hidden">
+        <div class="editor-grid">
+            <div>
+                <textarea id="qText" style="width:100%" rows="3" placeholder="题目内容 (支持粘贴图片)"></textarea>
+                <div id="qPreview" class="img-area" onclick="triggerUpload('qInput')">点击或粘贴题目图</div>
+                <input type="file" id="qInput" class="hidden" accept="image/*" onchange="handleFile(this, 'q')">
+            </div>
+            <div>
+                <textarea id="aText" style="width:100%" rows="3" placeholder="解析内容 (支持粘贴图片)"></textarea>
+                <div id="aPreview" class="img-area" onclick="triggerUpload('aInput')">点击或粘贴答案图</div>
+                <input type="file" id="aInput" class="hidden" accept="image/*" onchange="handleFile(this, 'a')">
+            </div>
+            <button class="btn btn-primary" style="grid-column: span 2;" onclick="saveNote()">保存并上传</button>
+        </div>
+
+        <input type="text" class="search-bar" id="searchInput" placeholder="🔍 搜索题目或解析关键词..." oninput="renderList()">
+
+        <div id="list"></div>
+    </div>
+</div>
+
+<script>
+    let db = { questions: [] };
+    let currentSha = null;
+    let tempImages = { q: '', a: '' };
+
+    window.onload = () => {
+        const savedToken = sessionStorage.getItem('gh_token');
+        const savedRepo = localStorage.getItem('gh_repo');
+        if(savedToken && savedRepo) {
+            document.getElementById('token').value = savedToken;
+            document.getElementById('repo').value = savedRepo;
+            validateAndSync();
+        }
+    }
+
+    async function validateAndSync() {
+        const token = document.getElementById('token').value;
+        const repo = document.getElementById('repo').value;
+        const url = `https://api.github.com/repos/${repo}/contents/data.json`;
+        
+        try {
+            const res = await fetch(url, { headers: { 'Authorization': `token ${token}` } });
+            if(res.ok) {
+                const data = await res.json();
+                db = JSON.parse(decodeURIComponent(escape(atob(data.content))));
+                currentSha = data.sha;
+                sessionStorage.setItem('gh_token', token);
+                localStorage.setItem('gh_repo', repo);
+                document.getElementById('statusDot').classList.add('status-active');
+                document.getElementById('mainContent').classList.remove('hidden');
+                renderList();
+            } else { alert("连接失败，请检查Token权限或仓库路径"); }
+        } catch (e) { alert("网络错误"); }
+    }
+
+    function logout() {
+        sessionStorage.clear();
+        localStorage.removeItem('gh_repo');
+        location.reload();
+    }
+
+    // 图片处理逻辑
+    function triggerUpload(id) { document.getElementById(id).click(); }
+    function handleFile(input, type) {
+        const reader = new FileReader();
+        reader.onload = (e) => setImg(type, e.target.result);
+        reader.readAsDataURL(input.files[0]);
+    }
+
+    window.addEventListener('paste', e => {
+        const item = e.clipboardData.items[0];
+        if (item?.type.includes('image')) {
+            const reader = new FileReader();
+            const type = document.activeElement.id === 'aText' ? 'a' : 'q';
+            reader.onload = (event) => setImg(type, event.target.result);
+            reader.readAsDataURL(item.getAsFile());
+        }
+    });
+
+    function setImg(type, data) {
+        tempImages[type] = data;
+        document.getElementById(type + 'Preview').innerHTML = `<img src="${data}">`;
+    }
+
+    // 云端保存
+    async function saveNote() {
+        const qVal = document.getElementById('qText').value;
+        if(!qVal && !tempImages.q) return alert("题目不能为空");
+
+        db.questions.unshift({
+            id: Date.now(),
+            q: qVal, a: document.getElementById('aText').value,
+            qImg: tempImages.q, aImg: tempImages.a,
+            date: new Date().toLocaleString()
+        });
+
+        const token = sessionStorage.getItem('gh_token');
+        const repo = localStorage.getItem('gh_repo');
+        
+        const res = await fetch(`https://api.github.com/repos/${repo}/contents/data.json`, {
+            method: 'PUT',
+            headers: { 'Authorization': `token ${token}` },
+            body: JSON.stringify({
+                message: "Update Note",
+                content: btoa(unescape(encodeURIComponent(JSON.stringify(db)))),
+                sha: currentSha
+            })
+        });
+
+        if(res.ok) {
+            const resData = await res.json();
+            currentSha = resData.content.sha;
+            resetEditor();
+            renderList();
+        }
+    }
+
+    function resetEditor() {
+        document.getElementById('qText').value = '';
+        document.getElementById('aText').value = '';
+        document.getElementById('qPreview').innerText = '点击或粘贴题目图';
+        document.getElementById('aPreview').innerText = '点击或粘贴答案图';
+        tempImages = { q: '', a: '' };
+    }
+
+    // 渲染与搜索过滤
+    function renderList() {
+        const keyword = document.getElementById('searchInput').value.toLowerCase();
+        const filtered = db.questions.filter(i => 
+            i.q.toLowerCase().includes(keyword) || i.a.toLowerCase().includes(keyword)
+        );
+
+        document.getElementById('list').innerHTML = filtered.map(i => `
+            <div class="card">
+                <div style="font-size:11px; color:#94a3b8">${i.date}</div>
+                <div style="margin:10px 0"><b>题目：</b>${i.q}</div>
+                ${i.qImg ? `<img src="${i.qImg}" style="max-width:100%">` : ''}
+                <div style="margin-top:10px; padding-top:10px; border-top:1px solid #f1f5f9">
+                    <b>解析：</b>${i.a}
+                </div>
+                ${i.aImg ? `<img src="${i.aImg}" style="max-width:100%">` : ''}
+            </div>
+        `).join('');
+    }
+</script>
+</body>
+</html>
